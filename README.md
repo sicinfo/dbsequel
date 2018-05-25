@@ -62,17 +62,19 @@ const { join } = require('path');
 
 module.exports = options => new Promise((resolve, reject) => {
   
-  const models = require(join(options.dirname, 'models', 'mysql', 'labti'))(options);
+  const model = require(join(options.dirname, 'models', 'mysql', 'labti'))(options)
+  .then(ff => ff('Grupo'));
   
   resolve(({ req }) => {
 
-    return models.then(models => models('Grupo')).then(({fetch}) => fetch());
-    
+    return model.then(({fetch}) => fetch(req));
 
   })
 
 });
+```
 
+```
 /**
  * application: labti
  * module: models/mysql/labti/xx-Grupo
