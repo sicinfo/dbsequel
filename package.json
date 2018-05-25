@@ -1,0 +1,11 @@
+{
+  "name": "sicinfo-dbsequel",
+  "version": "0.0.1",
+  "main": "lib/dbsequel",
+
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sicinfo/dbsequel"
+  }
+
+}
