@@ -1,11 +1,13 @@
 # DbSequel
 
+```
 /**
- * application labti-portal
+ * application: labti-server
+ * module: models/mysql/labti/index.js
  */
 
 const { join, sep } = require('path');
-const dbsequel = require('dbsequel');
+const dbsequel = require('sicinfo-dbsequel');
 
 const dialect = 'mysql'
 const schema = 'labti';
@@ -44,3 +46,101 @@ module.exports = options => {
 
   return options[dialect][schema];
 };
+```
+
+```
+/***
+ * application: labti
+ * module: application/grupo.js
+ * 
+ * Powered [0.0.1] by Moreira in 2017-12-06
+ * 
+ */
+'use strict';
+
+const { join } = require('path');
+
+module.exports = options => new Promise((resolve, reject) => {
+  
+  const models = require(join(options.dirname, 'models', 'mysql', 'labti'))(options);
+  
+  resolve(({ req }) => {
+
+    return models.then(models => models('Grupo')).then(({fetch}) => fetch());
+    
+
+  })
+
+});
+
+/**
+ * application: labti
+ * module: models/mysql/labti/xx-Grupo
+ */
+
+module.exports.schema = (Datatypes, done) => {
+
+  return done({
+    'nome': { 'type': Datatypes.STRING },
+    'id': Datatypes.PRIMARYKEY
+  })
+
+};
+```
+
+```
+/**
+ * application labti
+ * module: application/index.js
+*/
+
+const { join } = require('path');
+
+module.exports = ({ dirname, version }) => {
+
+  const { config } = require(join(dirname, 'package.json'));
+  Object.assign(config, { dirname, version, 'mysql': {} });
+
+  return name => {
+
+    const _promise = require(`./${name}`)(config);
+
+    return (req, res) => _promise
+      .then(next => next.call(this, { req }))
+      .then(resp => res.json(resp));
+
+  };
+
+};
+```
+
+```
+/**
+ * application: labti
+ * module: index.js
+ * 
+ * Updated: 
+ * [0.0.10] Moreira
+ * - inclui verison
+ * 
+ * [0.0.1] Moreira 2017-11-08
+ *
+ ************************************************/
+
+'use strict';
+
+const express = require('express');
+const { json } = require('body-parser');
+const { join } = require('path');
+
+const { version } = require(join(__dirname, '..', 'package.json'));
+const application = require('./application')({'dirname': __dirname, version});
+
+const app = module.exports = express();
+
+app.get('/version', (req, res) => res.json({ version }))
+
+app.get('/etiqueta(/:id)?', application('etiqueta'));
+
+app.get('/grupo(/:id)?', application('grupo'));
+```
