@@ -1,5 +1,6 @@
 # DbSequel
 
+### mysql
 ```
 /**
  * application: labti-server
@@ -47,7 +48,50 @@ module.exports = options => {
   return options[dialect][schema];
 };
 ```
+### postgres
+```
+/**
+ * application: labti-server
+ * module: models/postgres/citsmart/index.js
+ */
 
+const { join, sep } = require('path');
+const dbsequel = require('sicinfo-dbsequel');
+
+const dialect = 'postgres';
+const schema = 'citsmart';
+
+module.exports = options => {
+
+  dialect in options || (options[dialect] = {});
+
+  if (!(schema in options[dialect])) {
+
+    const {
+      database, username, password, 
+      host = 'localhost', 
+      port = '5432', 
+      pool = {}
+    } = require(join(process.env.HOME, options.dbconfig))[dialect][schema];
+
+    'max' in pool || (pool.max = 5);
+    'min' in pool || (pool.min = 0);
+    'idle' in pool || (pool.idle = 10000);
+    'acquire' in pool || (pool.acquire = 30000);
+
+    options[dialect][schema] = dbsequel({
+      database, username, password,
+      'options': { pool, dialect, host, port },
+      'dirmodels': __dirname
+    })
+
+  }
+
+  return options[dialect][schema];
+};
+```
+
+### apllication/grupo
 ```
 /***
  * application: labti
@@ -65,15 +109,17 @@ module.exports = options => new Promise((resolve, reject) => {
   const model = require(join(options.dirname, 'models', 'mysql', 'labti'))(options)
   .then(ff => ff('Grupo'));
   
-  resolve(({ req }) => {
+  resolve(opts => {
 
-    return model.then(({fetch}) => fetch(req));
+    return model.then(({fetch}) => fetch(opts));
 
   })
 
 });
 ```
 
+
+### schema para grupo
 ```
 /**
  * application: labti
@@ -90,6 +136,7 @@ module.exports.schema = (Datatypes, done) => {
 };
 ```
 
+### application/index
 ```
 /**
  * application labti
@@ -101,21 +148,43 @@ const { join } = require('path');
 module.exports = ({ dirname, version }) => {
 
   const { config } = require(join(dirname, 'package.json'));
-  Object.assign(config, { dirname, version, 'mysql': {} });
+  Object.assign(config, { dirname, version, 'mysql': {}, 'postgres': {} });
 
-  return name => {
+  return (name, promise) => {
 
-    const _promise = require(`./${name}`)(config);
+    return ({ query, params, method }, res) => {
 
-    return (req, res) => _promise
-      .then(next => next.call(this, { req }))
-      .then(resp => res.json(resp));
+      promise || (promise = require(`./${name}`)(config))
 
+      return promise
+        .then(next => {
+
+          const opts = { 'where': query, method };
+
+          Object.keys(params)
+            .filter(k => undefined !== params[k] && isNaN(k))
+            .forEach(k => opts[k] = params[k]);
+
+          return next.call(this, opts)
+        })
+        .then(resp => {
+          
+          if (resp.count) {
+            res.append('X-total-count', resp.count);
+          }
+
+          return res.json(resp.rows);
+        })
+        .catch(error => {
+          return res.status(404).json({error})
+        });
+    }
   };
 
 };
 ```
 
+### index
 ```
 /**
  * application: labti
@@ -145,4 +214,7 @@ app.get('/version', (req, res) => res.json({ version }))
 app.get('/etiqueta(/:id)?', application('etiqueta'));
 
 app.get('/grupo(/:id)?', application('grupo'));
+
+app.get('/solicitacaoservico/:idsolicitacaoservico', application('solicitacaoservico'));
+
 ```
