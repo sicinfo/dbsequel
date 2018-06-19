@@ -1,5 +1,9 @@
 ## DbSequal
 
+### [0.0.5] 2018-05-29
+- optimiza
+- corrige dbsequel
+
 ### [0.0.4] 2018-05-29
 - altera asmore-id -> sicinfo-idcreate
 
