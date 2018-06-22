@@ -1,5 +1,9 @@
 ## DbSequal
 
+### [0.0.6] 2018-06-22
+#### altera
+- altera assinatura do modulo para function no lugar de =>
+
 ### [0.0.5] 2018-05-29
 - optimiza
 - corrige dbsequel
