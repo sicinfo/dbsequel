@@ -1,5 +1,10 @@
 ## DbSequal
 
+### [models] 2018-06-28
+#### melhoria
+- leitura do arquivos model
+- teste do método save, update e delete
+
 ### [0.0.6] 2018-06-22
 #### altera
 - altera assinatura do modulo para function no lugar de =>
