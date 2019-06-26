@@ -2,19 +2,29 @@
  * application: sicinfo-dbsequel
  * module: lib/dbsequel.js
  * 
+ * Updated [1.0.0] by Moreira in 2019-06-22
+ * 
+ * 
  * Powered [0.0.1] by Moreira in 2017-05-25
  **/
 
-const Sequelize = require('sequelize');
-const { join } = require('path');
-const { readdir, readFile } = require('fs');
-const { newId } = require('sicinfo-idcreate');
-const { Op } = Sequelize;
-const { isArray } = Array;
+const 
+  Sequelize = require('sequelize'),
+  { newId } = require('sicinfo-idcreate'),
+  { Op } = Sequelize,
+  Datatypes = { Sequelize, newId };
 
-const Datatypes = { Sequelize, newId };
+[
+  'INTEGER', 
+  'TINYINT', 
+  'REAL', 
+  'DATE', 
+  'ENUM', 
+  'STRING', 
+  'TEXT', 
+  'VIRTUAL'
+].forEach(key => Datatypes[key] = Sequelize[key]);
 
-['INTEGER', 'TINYINT', 'REAL', 'DATE', 'ENUM', 'STRING', 'TEXT', 'VIRTUAL'].forEach(key => Datatypes[key] = Sequelize[key]);
 
 Datatypes.SECUNDARYKEY = {
   'type': Datatypes.STRING,
@@ -40,10 +50,10 @@ Datatypes.foreignKey = (references, options = {}) => {
     elem in options || (options[elem] = Datatypes.FOREIGNKEY[elem]);
   });
   return options;
-}
+};
 
 const parseQueryValues = one => resp => {
-  if (isArray(resp)) { resp = { 'rows': resp } }
+  if (Array.isArray(resp)) { resp = { 'rows': resp } }
   if (resp.rows.length == 0) { resp.rows = one ? {} : [] }
   else if (one) { resp.rows = resp.rows[0] }
   else {
@@ -51,17 +61,15 @@ const parseQueryValues = one => resp => {
     resp.rows = [head].concat(resp.rows.map(row => head.map(key => row[key])));
   }
   return resp;
-}
+};
 
 const parseFindValues = one => resp => {
-  if (isArray(resp)) { resp = { 'rows': resp } }
+  if (Array.isArray(resp)) { resp = { 'rows': resp } }
   if (resp.rows.length == 0) { resp.rows = one ? {} : [] }
   else {
 
-    const incl = {};
-    const { rows } = resp;
+    const incl = {}, { rows } = resp, data = [[]];
     let pos = 0;
-    const data = [[]];
 
     Object.keys(rows[0].dataValues).some(key => {
       const val = rows[0].dataValues[key];
@@ -69,7 +77,7 @@ const parseFindValues = one => resp => {
         incl[key] = true;
         Object.keys(val.dataValues).some(key => { data[0][pos++] = key });
       }
-      else data[0][pos++] = key
+      else data[0][pos++] = key;
     });
 
     rows.forEach((row, ind) => {
@@ -79,22 +87,22 @@ const parseFindValues = one => resp => {
         const val = row.dataValues[key];
         if (incl[key]) Object.keys(val.dataValues).forEach(key => {
           data[ind + 1][pos++] = val.dataValues[key];
-        })
+        });
         else {
           data[ind + 1][pos++] = val;
         }
-      })
+      });
     });
 
     if (one) {
       resp.rows = {};
-      data[0].forEach((key, ind) => resp.rows[key] = data[1][ind])
+      data[0].forEach((key, ind) => resp.rows[key] = data[1][ind]);
     }
     else resp.rows = data;
   }
 
   return resp;
-}
+};
 
 // const failFind = done => err => done(err.name && (
 //   `${err.name} - ${err.original && err.original.code || ''}`    
@@ -120,8 +128,8 @@ const _query = (sequelize, sqlString, options = {}) => {
 const _fetch = (model, options = {}) => {
   // força relacao INNER JOIN
   'include' in options && options['include'].forEach((include, index) => {
-    'required' in include || (options['include'][index]['required'] = true)
-  })
+    'required' in include || (options['include'][index]['required'] = true);
+  });
 
   return (model.primaryKeyAttributes.every(
     primaryKeyAttribute => primaryKeyAttribute in options
@@ -141,7 +149,6 @@ const _findAll = (model, options = {}, _options = {}) => {
   return model[`find${options.count ? 'AndCount' : ''}All`](options)
     .then(parseFindValues(_options.one))
     .catch(_failDone);
-
 };
 
 const _findOne = (model, options = {}) => {
@@ -150,11 +157,11 @@ const _findOne = (model, options = {}) => {
 };
 
 const _findById = (model, options = {}) => {
-
+  
   options.where = {};
   model.primaryKeyAttributes
-    .filter(pka => pka in options)
-    .forEach(pka => { options.where[pka] = options[pka] });
+    .filter(key => key in options)
+    .forEach(key => { options.where[key] = options[key] });
 
   return _findAll(model, options, { 'byId': true, 'one': true });
 };
@@ -171,13 +178,13 @@ const _update = (model, options) => {
     .filter(key => !(key in where))
     .some(key => data[key] = options.data[key]);
 
-  return model.update(data, { where }).then(rows => ({ rows }))
+  return model.update(data, { where }).then(rows => ({ rows }));
 };
 
 const _delete = (model, options) => {
 
   if (!model.primaryKeyAttributes.every(key => key in options)) {
-    return new Promisse((a, b) => b('erro'));
+    return new Promise((a, b) => b('erro'));
   }
 
   const where = options.where || {};
@@ -185,13 +192,13 @@ const _delete = (model, options) => {
     key in where || (where[key] = options[key]);
   });
 
-  return model.destroy({ where }).then(rows => ({ rows }))
-}
+  return model.destroy({ where }).then(rows => ({ rows }));
+};
 
 const _save = (model, options) => {
 
   if (model.primaryKeyAttributes.every(key => key in options)) {
-    return _update(model, options)
+    return _update(model, options);
   }
 
   return model.create(options.data);
@@ -206,12 +213,13 @@ module.exports = function ({ database, username, password, options = {}, dirmode
     options.operatorsAliases = Op;
   }
 
-  const sequelize = new Sequelize(database, username, password, options);
-  const relations = {};
-  const files = {};
+  const 
+    sequelize = new Sequelize(database, username, password, options), 
+    relations = {}, 
+    files = {};
 
   return new Promise((resolve, reject) => sequelize.authenticate()
-    .then(() => readdir(dirmodels, (err, args) => {
+    .then(() => require('fs').readdir(dirmodels, (err, args) => {
 
       // console.log(dirmodels);
 
@@ -223,7 +231,7 @@ module.exports = function ({ database, username, password, options = {}, dirmode
 
           // ler e o arquivos para Sequelize
           const name = _filename.split('.')[0].slice(3);
-          const modelFile = files[name] = require(join(dirmodels, _filename));
+          const modelFile = files[name] = require(require('path').join(dirmodels, _filename));
 
           // 0 - estrutura
           // 1 - opções
@@ -231,7 +239,7 @@ module.exports = function ({ database, username, password, options = {}, dirmode
           modelFile.schema(Datatypes, (schemas) => {
 
             if ('schema' === Object.keys(schemas)[0]) {
-              schemas = (obj => (obj[name] = schemas, obj))({})
+              schemas = (obj => (obj[name] = schemas, obj))({});
             }
 
             Object.keys(schemas).forEach(name => {
@@ -244,9 +252,10 @@ module.exports = function ({ database, username, password, options = {}, dirmode
               Object.keys(schema)
                 .filter(attr => 'object' === typeof (schema[attr]) && 'references' in schema[attr])
                 .some(foreignKey => {
-                  const belongsTo = associations.belongsTo || (associations.belongsTo = {});
-                  const { references } = schema[foreignKey];
-                  const options = belongsTo[references] || (belongsTo[references] = {});
+                  const 
+                    belongsTo = associations.belongsTo || (associations.belongsTo = {}),
+                    { references } = schema[foreignKey],
+                    options = belongsTo[references] || (belongsTo[references] = {});
                   options['foreignKey'] = foreignKey;
                 });
 
@@ -265,9 +274,9 @@ module.exports = function ({ database, username, password, options = {}, dirmode
           .forEach(association => {
             Object.keys(relations[filename][association]).forEach(target => {
               let options = relations[filename][association][target];
-              if ('string' === typeof (options)) options = { 'foreignKey': options }
+              if ('string' === typeof (options)) options = { 'foreignKey': options };
               sequelize.models[filename][association](sequelize.models[target], options);
-            })
+            });
           });
       });
 
@@ -285,7 +294,8 @@ module.exports = function ({ database, username, password, options = {}, dirmode
             // console.log(options);
 
             return _back(sequelize.models[modelName], options);
-          }
+          };
+          
           return {
             'fetch': _call(_fetch),
             'findAll': _call(_findAll),
@@ -296,7 +306,7 @@ module.exports = function ({ database, username, password, options = {}, dirmode
             'delete': _call(_delete),
             'drop': _call(_delete),
             'models': sequelize.models
-          }
+          };
         }
 
         else return {
@@ -304,8 +314,8 @@ module.exports = function ({ database, username, password, options = {}, dirmode
             return _query(sequelize, sqlString, options);
           },
           'models': sequelize.models
-        }
-      })
+        };
+      });
     }))
   );
 

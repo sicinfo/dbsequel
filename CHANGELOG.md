@@ -1,4 +1,10 @@
-## DbSequal
+## DbSequel
+
+### [1.0.1] 2019-06-26 by Moreira 
+- correções diversas
+
+### [1.0.0] 2019-06-22 by Moreira 
+- inclui dependencia de sicinfo-idcreate no package.json
 
 ### [0.0.8] 2018-06-28
 #### melhoria
