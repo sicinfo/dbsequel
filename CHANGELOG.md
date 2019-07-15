@@ -1,5 +1,12 @@
 ## DbSequel
 
+### [2.0.0] 2019-07-15 by moreira
+- altera estruturação dos objectos
+
+### [1.0.0] 2019-06-26 by Moreira 
+- inclui dependencia de sicinfo-idcreate no package.json
+- correções diversas
+
 ### [1.0.0] 2019-06-26 by Moreira 
 - inclui dependencia de sicinfo-idcreate no package.json
 - correções diversas
