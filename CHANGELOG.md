@@ -1,5 +1,8 @@
 ## DbSequel
 
+### [2.0.0] 2019-07-07 by Moreira 
+- inclui classes para extender sequelize.Model 
+
 ### [1.0.0] 2019-06-26 by Moreira 
 - inclui dependencia de sicinfo-idcreate no package.json
 - correções diversas

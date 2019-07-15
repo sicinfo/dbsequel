@@ -1,6 +1,6 @@
 {
-  "name": "dbsequel",
-  "version": "1.0.0",
+  "name": "sicinfo-dbsequel",
+  "version": "2.0.0",
   "main": "libs/dbsequel",
 
   "repository": {
