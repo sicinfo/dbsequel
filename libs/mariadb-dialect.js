@@ -1,5 +1,6 @@
 /**
  * application: dbsequel
+ * server-side
  * 
  * powered by Moreira in 2019-06-22
  */
@@ -10,102 +11,222 @@ const log = (a, ...b) => (({log}) => {
 log('loading...');
 
 const 
-  md5 = require('blueimp-md5'),
-  { assign, keys } = Object,
-  { isArray } = Array,
-  // { newId } = require('sicinfo-idcreate'),
-  { Model, DataTypes, fn, col, where, Op } = require('sequelize');
+
+  multi = class {
+
+    static inherit(..._bases) {
+      
+      class classes {
+        constructor(..._args) {
+          let index = 0;
+          for (const b of this.base) multi.copy(this, new b(_args[index++]));
+        }
+        get base() { return _bases; }
+      }
+
+      for (let base of _bases) {
+        multi.copy(classes, base);
+        multi.copy(classes.prototype, base.prototype);
+      }
+
+      return classes;
+    }
+
+    static copy(_target, _source) {
+      for (const key of Reflect.ownKeys(_source))
+        key !== "constructor" &&
+        key !== "prototype" &&
+        key !== "name" &&
+        Object.defineProperty(_target, key, Object.getOwnPropertyDescriptor(_source, key));
+    }
+    
+  },
   
+  uniqueId = function* (prefix = '_', _count = 0) {
+    while (true) yield `${prefix}${(_count++).toString(36).padStart(3, '0')}`;
+  },
+
+  md5 = require('blueimp-md5'),
+  { Model, DataTypes, fn, col, where, Op } = require('sequelize'),
+  
+  dialect =  'mariadb',
+  dialectOptions = {
+    'connectionTimeout': 1000,
+    'timezone': 'Etc/GMT0' 
+  },
+  pool = { 'max': 5, 'min': 0, 'idle': 10000 },
+  
+  errorsMsg = (a, ...b) => (msg => {
+    return (([code, message]) => ({ code, message }))(msg[a](...b));
+  })({
+    'collectionName': () => [400, 'collection name not defined!'],
+    'ConflitId': (b, c) => [409, `${a}: id "${c}" already exists to "${b}"`],
+    'conflit': (a, b) => [409, a],
+    'documentKey': a => [400, `invalid document key from ${a}`],
+    'DocumentKeyRequired': (b) => [412, `${a}: Document Key is required to ${b}`],
+    'FromAndToRequired': (b) => [412, `${a}: From and To is required to ${b}`],
+    'NotFound': (a, b) => [404, ((a, b) => `${a}not found${b}`)(a ? `${a} ` : '', b ? ` ({${b})` : '')],
+    'NotFoundById': (a) => [404, `(${a}) - not found!`],
+    'unchanged': (a, b) => [409, (b => `unchanged ${a}`)(b && ` (${b})` || '')],
+    'unremoved': (a, b) => (b => `unremoved ${a}`)(b && ` (${b})` || '')
+  });
+
 class Document extends Model {
   
-  static get isDocument() {
-    return !('isRelationship' in this) || !this.isRelationship;
-  }
-  
-  static get dialect() {
-    return 'mariadb';
-  }
-  
-  static get dialectOptions() {
-    return { 
-      'connectionTimeout': 1000,
-      'timezone': 'Etc/GMT0' 
-    };
-  }
-
-  static get prefixTableName() {
-    return  (a => a && (b => b && `${b}_`)(a.prefixTableName) || '')(this.sequelize.options.define);
-  }
-  
-  static getTableName() {
-    return `${this.prefixTableName}${super.getTableName().toLowerCase()}`;
-  }
-  
-  static sync(options = {}) {
-    
-    const
-      tableName = this.getTableName(),
-      attrs = [
-        '`rawdata` JSON NOT NULL UNIQUE CHECK (JSON_VALID(JSON_QUERY(`rawdata`, "$.*.*")))',
-        '`version` INTEGER NOT NULL DEFAULT 0',
-        '`createdAt` DATETIME NOT NULL',
-        '`updatedAt` DATETIME NOT NULL',
-        '`deletedAt` DATETIME',
-        '`collsKey` CHAR(32) AS (MD5(JSON_UNQUOTE(JSON_EXTRACT(JSON_KEYS(`rawdata`), "$[0]")))) VIRTUAL', 'INDEX (`collsKey`)',
-        '`doctKey` CHAR(32) AS (MD5(JSON_UNQUOTE(JSON_EXTRACT(JSON_KEYS(JSON_QUERY(`rawdata`, "$.*")), "$[0]")))) VIRTUAL', 'INDEX (`doctKey`)',
-        '`fromId` CHAR(32) AS (JSON_VALUE(`rawdata`, "$.*.from")) VIRTUAL',
-        '`toId` CHAR(32) AS (JSON_VALUE(`rawdata`, "$.*.to")) VIRTUAL', 
-        '`id` CHAR(32) AS (MD5(CONCAT(`collsKey`, `doctKey`, IFNULL(`fromId`, ""), IFNULL(`toId`, ""), IFNULL(`deletedAt`, "")))) VIRTUAL UNIQUE CHECK (`id` IS NOT NULL)',
-        `FOREIGN KEY (\`fromId\`) REFERENCES \`${tableName}\` (\`id\`) ON DELETE RESTRICT ON UPDATE RESTRICT`,
-        `FOREIGN KEY (\`toId\`) REFERENCES \`${tableName}\` (\`id\`) ON DELETE RESTRICT ON UPDATE RESTRICT`
-      ];
+  // keydata: quando for aresta dever ser um array com
+  // doctKey, fromId, toId
+  // exemple.createDocument([doctKey, fromIf, toId], rawdata, opts)
+  static createDocument(keydata, rawdata = {}, opts = {}) {
+    return new Promise((resolve, reject) => {
       
-    const { sequelize } = this;
-    sequelize.query(`CREATE TABLE IF NOT EXISTS \`${tableName}\` (${attrs.join(',')}) ENGINE=InnoDB`);
+      if (!Array.isArray(keydata)) keydata = [keydata];
+      if (!keydata[0]) return reject(errorsMsg('DocumentKeyRequired', this.name));
+      
+      keydata.unshift(this.collectionName);
+
+      Reflect.set(opts, 'defaults', { keydata, rawdata });
+      Reflect.set(opts, 'raw', true);
+      Reflect.set(opts, 'plain', true);
+      Reflect.set(opts, 'paranoid', false);
+      Reflect.set(opts, 'attributes', ['id']);
+      Reflect.set(opts, 'where', {});
+      
+      ['collsKey', 'doctKey', 'fromId', 'toId'].splice(0, keydata.length).map((key, ind) => {
+        Reflect.set(opts.where, key, ind < 2 ? md5(keydata[ind]) : keydata[ind]);
+      });
+
+      super.findOrCreate(opts).then(([{ id }, created]) => {
+        if (created) {
+          const _id = md5(Object.values(opts.where).join(''));
+          log(101, _id);
+          resolve({ 'result': { _id } });
+        }
+        else reject(errorsMsg('ConflitId', this.name, keydata[1]));
+      }).catch(reject);
+      
+    });
+  }
+  
+  static get collectionName() {
+    return this.name.toLowerCase();
+  }
+  
+  static attributes(name, ...args) {
+    return ['id', 'rawdata', Document.fnJsonExtractTo(`${name}.keydata`, 1, 'key')].concat(...args);
+  }
+  
+  static fetchAll(opts = {}) {
+    return new Promise((resolve, reject) => {
+      const arg = [opts, 'raw', true];
+      Reflect.has(...arg) || Reflect.set(...arg);
+      this.findAll(opts).then(resolve).catch(reject);
+    });
+  }
+  
+  static fetchAllCollections(opts = {}) {
+    return new Promise((resolve, reject) => {
+      
+      const 
+        { name, collectionName } = this,
+        hasAttributes = Reflect.has(opts, 'attributes');
+        
+      if (!hasAttributes) {
+        Reflect.has(opts, 'attributes') || Reflect.set(opts, 'attributes', []);
+        opts.attributes.push(...this.attributes(name));
+      }
+      
+      {
+        Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
+        const arg = where(col(`${name}.collsKey`), Op.eq, md5(collectionName));
+        Reflect.has(opts.where, Op.and) ?
+        Reflect.get(opts.where, Op.and).push(arg) :
+        Reflect.set(opts.where, Op.and, [arg]);
+      }
+
+      ['Inherit', 'From', 'To'].some(key => {
+        !Reflect.has(this, key) ||
+        ((_model = Reflect.get(this, key)) =>
+          _model && (Reflect.has(opts, 'include') || Reflect.set(opts, 'include', [])) &&
+          opts.include.push(Document._include(hasAttributes, _model))
+        )() || 
+        hasAttributes || 
+        opts.attributes.push(`${key.toLowerCase()}Id`);
+      });
+
+      this.fetchAll(opts).then(result => {
+        if (!result) reject(errorsMsg('NotFound', collectionName));
+        else if (opts.plain) resolve({ 'result': this._parse(result) });
+        else if (Array.isArray(result)) resolve({ 'result': result.map(arg => this._parse(arg)) });
+        else resolve({ result });
+      }).catch(error => {
+        console.warn(101, __filename, error);
+        reject(error);
+      });
+    });
+  }
+  
+  static fetchDocumentById(id, opts = {}) {
+    return new Promise((resolve, reject) => {
+      
+      Reflect.set(opts, 'where', { id });
+      Reflect.set(opts, 'limit', 1);
+      Reflect.set(opts, 'plain', true);
+      
+      Reflect.has(opts, 'paranoid') ||
+      Reflect.set(opts, 'paranoid', false);
+      
+      {
+        const args = this.attributes(this.name);
+        Reflect.has(opts, 'attributes') ?
+        Reflect.get(opts, 'attributes').push(...args) :
+        Reflect.set(opts, 'attributes', args);
+      }
+
+      this.fetchAll(opts).then(result => {
+        if (result) resolve(this._parse(result));
+        else reject(errorsMsg('NotFoundById', this.collectionName, id));
+      }).catch(reject);
+      
+    });
+  }
+  
+  static fetchDocument(documentKey, opts = {}) {
+    return new Promise((resolve, reject) => {
+    
+      if (!documentKey) return reject(errorsMsg('documentKey'));
+      
+      Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
+      
+      {
+        const arg = where(col(`${this.name}.doctKey`), Op.eq, md5(documentKey));
+        Reflect.has(opts.where, Op.and) ?
+        Reflect.get(opts.where, Op.and).push(arg) :
+        Reflect.set(opts.where, Op.and, [arg]);
+      }
+      
+      this.fetchOneCollection(opts).then(({ result = {}}) => {
+        resolve({ 'result': Reflect.get(result, documentKey) });
+      }).catch(reject);
+      
+    });
+  }
+  
+  static fetchOneCollection(opts = {}) {
+
+    [
+      ['limit', 1],
+      ['plain', true]
+    ].every(([key, val]) => Reflect.set(opts, key, val));
+      
+    return this.fetchAllCollections(opts);
+  }
+  
+  static fnJsonExtract(arg0, arg1) {
+    return fn('JSON_UNQUOTE', fn('JSON_EXTRACT', col(arg0), `$[${arg1}]`));
   }
 
-  static async init(attrs, opts = {}) {
-    if (!opts.sequelize) throw 'No Sequelize instance';
-    if (!attrs) attrs = {};
-  
-    if (!attrs.rawdata) attrs.rawdata = {
-      'type': DataTypes.JSON,
-      'allowNull': false
-    };
-    
-    if (!attrs.id) attrs.id = {
-      'type': DataTypes.CHAR(32),
-      'primaryKey': true,
-      'autoIncrement': true
-    };
-    
-    await super.init(
-      attrs,
-      assign({ 'sequelize': opts.sequelize },
-        ...['freezeTableName', 'timestamps', 'paranoid', 'version'].map(k => (o => (o[k] = undefined === opts[k] || opts[k], o))({})),
-        ...['tableName'].filter(k => undefined !== opts[k]).map(k => (o => (o[k] = opts[k], o))({}))
-      )
-    );
-  }
-
-  static fetchAll(options) {
-    options = assign({ 'raw': true }, options);
-    return super.findAll(options);
-  }
-  
-  static _fnJsonValueQuery(fnJson, arg, opts) {
-    if (undefined == opts) [arg, opts] = ['rawdata', arg];
-    if ('string' === typeof(arg)) arg = col(arg);
-    opts = 'string' === typeof(opts) ? `$.${opts}` : fn('CONCAT', '$.', opts);
-    return fn(fnJson, arg, opts);
-  }
-  
-  static fnJsonQuery(...args) {
-    return this._fnJsonValueQuery('JSON_QUERY', ...args);
-  }
-  
-  static fnJsonValue(...args) {
-    return this._fnJsonValueQuery('JSON_VALUE', ...args);
+  static fnJsonExtractTo(arg0, arg1, arg2) {
+    return [this.fnJsonExtract(arg0, arg1), arg2];
   }
   
   static fnJsonKeys(arg, opts) {
@@ -114,98 +235,60 @@ class Document extends Model {
     return opts.unquote ? fn('JSON_UNQUOTE', fn('REGEXP_REPLACE', keys, '[[]|[]]', '')) : keys;
   }
   
-  static patchCollection(values = {}, options = {}) {
-    return new Promise((accept, reject) => {
-      
-      const { collectionName } = this;
-      if (undefined === collectionName || null == collectionName || '' === `${collectionName}`) {
-        return reject({ 'code': '403', 'message': `indefined or invalid collection name (${collectionName})` });
-      }
-        
-      if (undefined === options.where) options.where = {};
-      options.where.collsKey = md5(collectionName);
-      
-      const rawdata = fn('JSON_SET'
-        , col('rawdata')
-        , ...keys(values)
-          .map(key => [`$.${collectionName}.${key}`, values[key]])
-          .reduce((a, b) => a.concat(b))
-        );
-      
-      super.update({ rawdata }, options)
-        .then(([updated]) => {
-          if (updated) accept({ 'code': 204 });
-          else reject({ 'code': 400, 'message': `unchanged collection (${collectionName}` });
-        })
-        .catch(error => {
-          if (error.name && error.name.startsWith('Sequelize')) reject({
-            'code': 409,
-            'message': error.errors.map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
-          });
-          else reject(error);
-        });
-    });
+  static fnJsonQuery(...args) {
+    return this._fnJsonValueQuery('JSON_QUERY', ...args);
   }
   
-  static removeCollection(options = {}) {
-    return new Promise((accept, reject) => {
-      
-      const { collectionName } = this;
-      if (undefined === collectionName || null == collectionName || '' === `${collectionName}`)
-        return reject({ 'code': '403', 'message': `indefined or invalid collection name (${collectionName})` });
-        
-      if (undefined === options.where) options.where = {};
-      options.where.collsKey = md5(collectionName);
-      
-      super.destroy(options)
-        .then(resp => {
-          if (resp) accept({ 'code': 204 });
-          else reject({ 'code': 400, 'message': `unremoved collection (${collectionName}` });
-        })
-        .catch(error => {
-          if (error.name && error.name.startsWith('Sequelize')) reject({
-            'code': 409,
-            'message': error.errors.map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
-          });
-          else reject(error);
-        });
-    });
+  static fnJsonValue(field, path) {
+    return fn('JSON_VALUE', col(field), `$.${path}`);
   }
   
-  static fetchAllCollections(options = {}) {
+  static fnJsonValueTo(field, path, alias) {
+    return [this.fnJsonValue(field, path), alias];
+  }
+  
+  static fromJsonToCsv(data, head = [], body = []) {
     
-    options = assign({ 'attributes': [], 'where': {} }, options);
-    const { attributes, where } = options;
 
-    const { collectionName, name } = this;
+    if (Array.isArray(data)) {
+      if (0 == data.length) return [];
+      const body = data.map(a => Document.fromJsonToCsv(a, head )[1]).map(a => undefined === a ? undefined : a);
+      return [head].concat(body);
+      
+      
+      
+      
+      // if (opts.head) {
+        
+      // }
+    //   hasHead = !head;
+    //   head || (head = []);
+    //   const body = data.map(_data => Document.fromJsonToCsv(_data, head, true));
+    //   return [ head, body ];
+    }
     
-    attributes.push(
-      (colName => [fn('JSON_QUERY', col(colName), '$.*'), colName])(`${name}.rawdata`),
-      (colName => [col(colName), colName])(`${name}.id`)
-    );
+    else {
+
+      for (const [key, val] of Object.entries(data)) {
+        let ind =  head.indexOf(key);
+        if (ind < 0) {
+          head.push(key);
+          ind = head.length -1;
+        }
+        body[ind] = 'object' === typeof(val) && !Array.isArray(val) ? Document.fromJsonToCsv(val) : val;
+      }
+
+      if (0 == head.length) return [];
+      return [ head, body];
+      
+    }
     
-    where.collsKey = md5(collectionName);
+// log(226, hasHead, _isArray, head, body)    ;
     
-    return this.fetchAll(options)
-      .then(arg => {
-        if (arg) return { 
-          'result': options.plain ? 
-            this._parse(arg, name) : 
-            isArray(arg) ? arg.map(arg => this._parse(arg, name)) : arg 
-        };
-        else throw { 'code': 404, 'message': `${collectionName} not found (${arg})` };
-      })
-      .catch(error => {
-        (console.warn)(101, __filename, error);
-        return error;
-      });
+    
+    // return (resp => log(230, hasHead, resp) || resp)(hasHead && !_isArray && body || [head].concat(hasHead ? body : [body.length ? body : ]));
   }
-  
-  static fetchOneCollection(options = {}) {
-    assign(options, { 'limit': 1, 'plain': true });
-    return this.fetchAllCollections(options);
-  }
-  
+
   static jsonKeysToSql(col = '`rawdata`') {
     return `JSON_KEYS(${col})`;
   }
@@ -214,189 +297,224 @@ class Document extends Model {
     return `JSON_QUERY(${col}, CONCAT('$.', ${arg}))`;
   }
   
+  static getTableName() {
+    return `${this.prefixTableName}${super.getTableName().toLowerCase()}`;
+  }
+  
+  static get hasInherit() {
+    return Reflect.has(this, 'Inherit');
+  }
+  
+  static get hasFrom() {
+    return Reflect.has(this, 'From');
+  }
+  
+  static get hasTo() {
+    return Reflect.has(this, 'To');
+  }
+  
+  static init(attrs = {}, opts = {}) {
+    
+    this.hasInherit && Reflect.set(attrs, `inheritId`, DataTypes.CHAR(32));
+    this.hasFrom && Reflect.set(attrs, `fromId`, DataTypes.CHAR(32));
+    this.hasTo && Reflect.set(attrs, `toId`, DataTypes.CHAR(32));
+
+    ['keydata', 'rawdata'].some(key => {
+      Reflect.has(attrs, key) || Reflect.set(attrs, key, {
+        'type': DataTypes.JSON,
+        'allowNull': false
+      });
+    });
+    
+    Reflect.has(attrs, 'id') || Reflect.set(attrs, 'id', {
+      'type': DataTypes.CHAR(32),
+      'primaryKey': true,
+      'autoIncrement': true
+    });
+    
+    Reflect.has(opts, 'freezeTableName') || Reflect.set(opts, 'freezeTableName', true);
+    Reflect.has(opts, 'timestamps') || Reflect.set(opts, 'timestamps', true);
+    Reflect.has(opts, 'paranoid') || Reflect.set(opts, 'paranoid', true);
+    Reflect.has(opts, 'version') || Reflect.set(opts, 'version', true);
+
+    super.init(attrs, opts);
+    
+    this.hasInherit && this.Inherit && this.belongsTo(this.Inherit, { 'foreignKey': `inheritId` });
+    this.hasFrom && this.From && this.belongsTo(this.From, { 'foreignKey': `fromId` });
+    this.hasTo && this.To && this.belongsTo(this.To, { 'foreignKey': `toId` });
+
+  }
+  
+  static patchCollection(values = {}, options = {}) {
+    return new Promise((resolve, reject) => {
+      
+      const args = Object.entries(values).reduce((acc, [key, val]) => acc.concat(`${key}`).concat(val), []);
+      if (0 == args.length) return reject(errorsMsg('unchanged', this.collectionName));
+      
+      const rawdata = fn('JSON_COMPACT', fn('JSON_MERGE_PATCH', col(`rawdata`), fn('JSON_OBJECT', ...args)));
+      
+      super.update({ rawdata }, options).then(([updated]) => {
+        if (updated) resolve({ 'code': 204 });
+        else reject(errorsMsg('unchanged', this.collectionName));
+      }).catch(error => {
+        reject(error.name && error.name.startsWith('Sequelize') && {
+          'code': 409,
+          'message': error.errors.map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
+        } || error);
+      });
+      
+    });
+  }
+
+  static patchDocument(id, values, options = {}) {
+    Reflect.set(options, 'where', where(col('id'), Op.eq, id));
+    return this.patchCollection(values, options);
+  }
+  
+  static get prefixTableName() {
+    return  (a => a && (b => b && `${b}_`)(a.prefixTableName) || '')(this.sequelize.options.define);
+  }
+  
   static regexpReplaceToSql(arg) {
     return `JSON_UNQUOTE(REGEXP_REPLACE(${arg}, '[[]|[]]', ''))`;
   }
   
-  static createCollection(values = {}, options = {}) {
-    const { collectionName } = this;
-
-    if (undefined === collectionName || null == collectionName || !`${collectionName}`) {
-      return Promise.reject({ 'code': '403', 'message': `indefined or invalid collection name (${collectionName})` });
-    }
+  static removeCollection(options = {}) {
+    return new Promise((resolve, reject) => {
       
-    options = assign(rawdata => ({
-      'defaults': { rawdata },
-      'where': { 'rawdata': fn('JSON_UNQUOTE', JSON.stringify(rawdata)) },
-      'raw': true,
-      'plain': true,
-      'paranoid': false,
-      'attributes': ['id']
-    }))((a => (a[collectionName] = values, a))({}), options);
-
-    return super.findOrCreate(options)
-      .then(([{ id }]) => {
-        if (id) throw {'code': 409, 'message': id };
-        return this.fetchAll(options).then(({ id }) => ({ 'result': { '_id': id } }));
-      })
-      .catch(({code = 500, message, name, errors }) => {
-        if (name && name.startsWith('Sequelize'))
-          return {
-            'code': 409,
-            'message': (isArray(errors) ? errors : [errors]).map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
-          };
-        else {
-          [[148.0, __filename, code], [148.1, __filename, message]].forEach(msg => (console.warn)(...msg));
-          return { code, message };
-        }
-      });
-  }
-
-  static createDocument(documentKey, values = {}, options) {
-    if (undefined === documentKey || null == documentKey || '' === `${documentKey}`) {
-      return Promise.reject({ 'code': '403', 'message': `invalid key (${documentKey})` });
-    }
-    
-    return this.createCollection((data => (data[documentKey] = values, data))({}), options);
-  }
+      Reflect.has(options, 'where') || 
+      Reflect.set(options, 'where', {});
+      
+      const { collectionName } = this;
+      Reflect.set(options.where, 'collsKey', md5(collectionName));
   
-  static patchDocument(documentKey, values = {}, options = {}) {
-    return new Promise((accept, reject) => {
-      if (undefined === documentKey || null == documentKey || '' === `${documentKey}`)
-        return reject({ 'code': '403', 'message': `invalid key (${documentKey})` });
-        
-      if (undefined === options.where) options.where = {};
-      options.where.doctKey = md5(documentKey);
-      
-      this.patchCollection(
-        assign({}, ...keys(values).map(fieldName => (a => (a[`${documentKey}.${fieldName}`] = values[fieldName], a))({}))),
-        options
-      ).then(accept).catch(error => {
-        if (error.code == 400) error.message = `unchanged document (${documentKey})`;
-        reject(error);
+      super.destroy(options).then(result => {
+        if (result) resolve({ 'code': 204 });
+        else reject(errorsMsg('unremoved', 'collection', collectionName));
+      }).catch(error => {
+        reject((error.name && error.name.startsWith('Sequelize')) ?
+          errorsMsg('unremoved', 'collection', error.errors.map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')) : 
+          error
+        );
       });
     });
   }
   
   static removeDocument(documentKey, options = {}) {
-    return new Promise((accept, reject) => {
-      if (undefined === documentKey || null == documentKey || '' === `${documentKey}`)
-        return reject({ 'code': '403', 'message': `invalid key (${documentKey})` });
-        
-      if (undefined === options.where) options.where = {};
-      options.where.doctKey = md5(documentKey);
+    return new Promise((resolve, reject) => {
       
-      this.removeCollection(options).then(accept).catch(error => {
-        if (error.code == 400) error.message = `unchanged document (${documentKey})`;
-        reject(error);
+      if (!documentKey) return reject(errorsMsg('documentKey'));
+      
+      Reflect.has(options, 'where') || 
+      Reflect.set(options, 'where', {});
+      Reflect.set(options.where, 'doctKey', md5(documentKey));
+      
+      this.removeCollection(options).then(resolve).catch(error => {
+        reject(error.code == 400 ? errorsMsg('unchanged', 'document', documentKey) : error);
       });
+      
     });
   }
   
-  static fetchDocument(documentKey) {
-    return this.fetchOneCollection({ 'where': { 'doctKey': md5(documentKey) } })
-      .then(arg => (arg.result = arg.result[documentKey], arg));
-    
+  static startTransaction() {
+    return this.sequelize.transaction;
   }
   
-  static _parse(data, name) {
-log(303, data)    ;
-    return keys(data).some(field => name === field.split('.').slice(0, -1).join('.')) &&
-      (({ isRelationship }) => (_id => _id && (raw => (_key => _key && assign(raw[_key], { _id, _key },
-          isRelationship && ['from', 'to'].reduce((red, key) => ((val => (val && (red[`_${key}`] = val)))(raw[key]), red), {})
-        ))(keys(raw)[0]))((raw => raw && JSON.parse(raw))(data[`${name}.rawdata`])))
-        (data[`${name}.id`]))(this);
+  static sync(options = {}) {
+    
+    const
+      tableName = this.getTableName(),
+      attrs = [
+//        '`keydata` JSON NOT NULL UNIQUE CHECK (JSON_VALID(`keydata`))',
+        '`keydata` JSON NOT NULL CHECK (JSON_VALID(`keydata`))',
+        '`rawdata` JSON NOT NULL CHECK (JSON_VALID(`rawdata`))',
+        '`version` INTEGER NOT NULL DEFAULT 0',
+        '`createdAt` DATETIME NOT NULL',
+        '`updatedAt` DATETIME NOT NULL',
+        '`deletedAt` DATETIME',
+        '`collsKey` CHAR(32) AS (MD5(JSON_UNQUOTE(JSON_EXTRACT(`keydata`, "$[0]")))) VIRTUAL', 'INDEX (`collsKey`)',
+        '`doctKey` CHAR(32) AS (MD5(JSON_UNQUOTE(JSON_EXTRACT(`keydata`, "$[1]")))) VIRTUAL', 'INDEX (`doctKey`)',
+        '`inheritId` CHAR(32) AS (SUBSTRING(JSON_UNQUOTE(JSON_EXTRACT(`keydata`, "$[1]")), 1, 32)) VIRTUAL', 'INDEX (`inheritId`)',
+        '`fromId` CHAR(32) AS (JSON_UNQUOTE(JSON_EXTRACT(`keydata`, "$[2]"))) VIRTUAL',
+        '`toId` CHAR(32) AS (JSON_UNQUOTE(JSON_EXTRACT(`keydata`, "$[3]"))) VIRTUAL', 
+        '`id` CHAR(32) AS (MD5(CONCAT(`collsKey`, `doctKey`, IFNULL(`fromId`, ""), IFNULL(`toId`, ""), IFNULL(`deletedAt`, "")))) VIRTUAL UNIQUE', 'CHECK (`id` IS NOT NULL)',
+        `FOREIGN KEY (\`fromId\`) REFERENCES \`${tableName}\` (\`id\`) ON DELETE RESTRICT ON UPDATE RESTRICT`,
+        `FOREIGN KEY (\`toId\`) REFERENCES \`${tableName}\` (\`id\`) ON DELETE RESTRICT ON UPDATE RESTRICT`
+      ];
+      
+    return this.sequelize.query(`CREATE TABLE IF NOT EXISTS \`${tableName}\` (${attrs.join(',')}) ENGINE=InnoDB`);
   }
-          
-}
 
-class Relationship extends Document {
-  
-  static get isRelationship() {
-    return true;
+  static _fnJsonValueQuery(fnJson, arg, opts) {
+    if (undefined == opts) [arg, opts] = ['rawdata', arg];
+    if ('string' === typeof(arg)) arg = col(arg);
+    opts = 'string' === typeof(opts) ? `$.${opts}` : fn('CONCAT', '$.', opts);
+    return fn(fnJson, arg, opts);
   }
   
-  static init(attrs, opts = {}) {
-    if (!attrs) attrs = {};
+  static _include(hasAttributes, model, ...args) {
+    
+    const opts = { model, 'required': false, 'paranoid': false, 'include': [] };
+    
+    Reflect.set(opts, 'attributes', hasAttributes && [] || this.attributes(args.reduce(
+      (acc, { options }) => acc.concat(options.name.singular),
+      [model.options.name.singular]
+    ).reverse().join('->')));
 
-    for (const elem of ['from', 'to']) (key => {
-      if (!attrs[key]) attrs[key] = { 'type': DataTypes.CHAR(32) };
-    })(`${elem}Id`);
-    
-    super.init(attrs, opts);
-    
-    ((opts, ...args) => args.forEach(model => {
-      model.init(null, opts);
-      this.belongsTo(model, { 'foreignKey': `${model.name.toLowerCase()}Id` });
-    }))(
-      {
-        'sequelize': opts.sequelize, 
-        'freezeTableName': true, 
-        'tableName': opts.tableName 
-      }, 
-      class From extends Document {}, 
-      class To extends Document {}
-    );
-  }
-  
-  static createDocument(documentKey, values = {}, from, to, options) {
-    if (undefined === documentKey || null == documentKey || '' === `${documentKey}`) {
-      return Promise.reject({ 'code': '403', 'message': `invalid key (${documentKey})` });
+    for (const key of ['Inherit', 'From', 'To']) {
+      !Reflect.has(model, key) ||
+      ((_model = Reflect.get(model, key)) => 
+        _model && opts.include.push(Document._include(hasAttributes, _model, model))
+      )() || hasAttributes || opts.attributes.push(`${key.toLowerCase()}Id`);
     }
-    
-    return this.createCollection(
-      (data => (data[documentKey] = values, assign(data, { from, to })))({}),
-      options
-    );
-  }
 
-  static fetchAllCollections(options = {}) {
-    
-    options = assign({ 
-      'include': [],
-      'timestamps': false,
-    }, options);
-
-    this.From && options.include.push(Relationship._include(class From extends this.From {}));
-    this.To && options.include.push(Relationship._include(class To extends this.To {}));
-
-    return super.fetchAllCollections(options);
+    return opts;
   }
   
-  static _include(model, ...args) {
-      return assign({
-          model,
-          required: false,
-          paranoid: false,
-          'attributes': [
-            (colName => [col(colName), colName])('id'),
-            (colName => (col => [fn('JSON_QUERY', col, '$.*'), colName])(
-              col((a => `${a}.${colName}`)(args.reduce((r, a) => r.concat(a.name), [model.name]).reverse().join('->')))
-            ))('rawdata')
-              ]
-        },
-  
-        model.isRelationship && ({
-          'include': [
-            model.From && class From extends model.From {},
-            model.To && class To extends model.To {}
-          ].filter(a => a).map(_model => Relationship._include(_model, model, ...args))
-        })
-      );
-  }
+  static _parse(resp) {
+    
+    const rawdata = resp.rawdata ?
+      (({ rawdata, id, key } = resp) => Object.assign({}, rawdata, { '_id': id, '_key': key }))() :
+      Object.entries(resp).reduce((a, [k, v]) => (null == v || Reflect.set(a, k, v)) && a, {});
 
-  static _parse(data, name, _from = 'From', _to = 'To') {
-log(389, data);    
-    return (resp => (log)(388, resp) || resp && assign(resp,
-        ...(([_from, _to]) => [_from && { _from }, _to && { _to }])
-        ([_from, _to].map(name =>
-          (model => model && model._parse(data, name, `${name}.From`, `${name}.To`))
-          (this[name.split('.').slice(-1)[0]])
-        ))
-      ))
-      (super._parse(data, name));
+    for (const arg of ['Inherit', 'From', 'To']) if (Reflect.has(this, arg)) {
+      const 
+        key = `_${arg.toLowerCase()}`,
+        obj = Reflect.get(this, arg);
+        
+      {
+        const attr = `${key.slice(1)}Id`;
+        
+        if (Reflect.has(resp, attr)) {
+          Reflect.set(rawdata, key, Reflect.get(resp, attr));
+          continue;
+        }
+      }
+
+      if (obj) {
+        const 
+          _name = `${obj.name}.`,
+          _data = Object.entries(resp)
+            .filter(([key]) => key.startsWith(_name))
+            .map(([key, val]) => [key.replace(_name, ''), val])
+            .reduce((acc, [key, val]) => Reflect.set(acc, key, 'rawdata' === key ? JSON.parse(val) : val) && acc, {});
+            
+        Reflect.has(_data, 'rawdata') && 
+        Reflect.set(rawdata, key, this._parse.call(obj, _data));
+      }
+        
+    }
+
+    return rawdata;
   }
 
 }
 
-module.exports = { Document, Relationship };
+module.exports = { 
+  pool, 
+  dialect, 
+  dialectOptions, 
+  uniqueId, 
+  Document
+  // Relationship, 
+};
