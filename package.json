@@ -1,18 +1,5 @@
 {
   "name": "sicinfo-dbsequel",
   "version": "2.1.0",
-  "main": "libs/mariadb-dialect.js",
-  "scripts": {
-    "test": "mocha test"
-  },
-  "dependencies": {
-    "blueimp-md5": "^2",
-    "mariadb": "^2",
-    "sequelize": "^5"
-  },
-  "devDependencies": {
-    "@types/sequelize": "^4",
-    "chai": "^4.2.0",
-    "mocha": "^7"
-  }
+  "main": "libs/mariadb-dialect.js"
 }
