@@ -7,7 +7,6 @@ const
   { expect } = require('chai'),
   { Document } = require('../libs/mariadb-dialect');
 
-
 describe('Document static functions', () => {
   
   it('#1 fromJsonToCsv', () => {

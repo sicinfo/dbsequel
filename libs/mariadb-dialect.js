@@ -115,43 +115,43 @@ class Document extends Model {
     return ['id', 'rawdata', Document.fnJsonExtractTo(`${name}.keydata`, 1, 'key')].concat(...args);
   }
   
+  /** @param {object} opts */
   static fetchAll(opts = {}) {
-    return new Promise((resolve, reject) => {
-      const arg = [opts, 'raw', true];
-      Reflect.has(...arg) || Reflect.set(...arg);
-      this.findAll(opts).then(resolve).catch(reject);
-    });
+    Reflect.has(opts, 'raw') ||
+      Reflect.set(opts, 'raw', true);
+    return this.findAll(opts);
   }
   
   static fetchAllCollections(opts = {}) {
-    return new Promise((resolve, reject) => {
-      
-      const 
-        { name, collectionName } = this,
-        hasAttributes = Reflect.has(opts, 'attributes');
-        
-      if (!hasAttributes) {
-        Reflect.has(opts, 'attributes') || Reflect.set(opts, 'attributes', []);
-        opts.attributes.push(...this.attributes(name));
-      }
-      
-      {
-        Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
-        const arg = where(col(`${name}.collsKey`), Op.eq, md5(collectionName));
-        Reflect.has(opts.where, Op.and) ?
+    
+    const
+      { name, collectionName } = this,
+      hasAttributes = Reflect.has(opts, 'attributes');
+
+    if (!hasAttributes) {
+      Reflect.has(opts, 'attributes') || Reflect.set(opts, 'attributes', []);
+      opts.attributes.push(...this.attributes(name));
+    }
+
+    {
+      Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
+      const arg = where(col(`${name}.collsKey`), Op.eq, md5(collectionName));
+      Reflect.has(opts.where, Op.and) ?
         Reflect.get(opts.where, Op.and).push(arg) :
         Reflect.set(opts.where, Op.and, [arg]);
-      }
+    }
 
-      ['Inherit', 'From', 'To'].some(key => {
-        !Reflect.has(this, key) ||
+    ['Inherit', 'From', 'To'].some(key => {
+      !Reflect.has(this, key) ||
         ((_model = Reflect.get(this, key)) =>
           _model && (Reflect.has(opts, 'include') || Reflect.set(opts, 'include', [])) &&
           opts.include.push(Document._include(hasAttributes, _model))
-        )() || 
-        hasAttributes || 
+        )() ||
+        hasAttributes ||
         opts.attributes.push(`${key.toLowerCase()}Id`);
-      });
+    });
+
+    return new Promise((resolve, reject) => {
 
       this.fetchAll(opts).then(result => {
         if (!result) reject(errorsMsg('NotFound', collectionName));
@@ -221,6 +221,10 @@ class Document extends Model {
     return this.fetchAllCollections(opts);
   }
   
+  /**
+   * @param {*} arg0 - column name
+   * @param {*} arg1 - key name
+   */
   static fnJsonExtract(arg0, arg1) {
     return fn('JSON_UNQUOTE', fn('JSON_EXTRACT', col(arg0), `$[${arg1}]`));
   }
@@ -348,18 +352,30 @@ class Document extends Model {
   static patchCollection(values = {}, options = {}) {
     return new Promise((resolve, reject) => {
       
-      const args = Object.entries(values).reduce((acc, [key, val]) => acc.concat(`${key}`).concat(val), []);
-      if (0 == args.length) return reject(errorsMsg('unchanged', this.collectionName));
+      // JSON_MERGE_PATCH was introduced in MariaDB 10.2.25, MariaDB 10.3.16 and MariaDB 10.4.5
+      // const args = Object.entries(values).reduce((acc, [key, val]) => acc.concat(`${key}`).concat(val), []);
+
+      const args = (() => {
+        const [upds, rems] = [[], []];
+        for (const [k, v] of Object.entries(values)) null == v ? rems.push(`$.${k}`) : upds.push(`$.${k}`, v);
+        const arg0 = rems.length ? fn('JSON_REMOVE', col(`rawdata`), ...rems) : undefined;
+        return upds.length && fn('JSON_SET', arg0 || col(`rawdata`), ...upds) || arg0;
+      })();
+      if (!args) return reject(errorsMsg('unchanged', this.collectionName));
       
-      const rawdata = fn('JSON_COMPACT', fn('JSON_MERGE_PATCH', col(`rawdata`), fn('JSON_OBJECT', ...args)));
+      // JSON_MERGE_PATCH was introduced in MariaDB 10.2.25, MariaDB 10.3.16 and MariaDB 10.4.5
+      // const rawdata = fn('JSON_COMPACT', fn('JSON_MERGE_PATCH', col(`rawdata`), fn('JSON_OBJECT', ...args)));
+
+      const rawdata = fn('JSON_COMPACT', args);
       
       super.update({ rawdata }, options).then(([updated]) => {
         if (updated) resolve({ 'code': 204 });
         else reject(errorsMsg('unchanged', this.collectionName));
       }).catch(error => {
+        log(360, ...Object.entries(error));        
         reject(error.name && error.name.startsWith('Sequelize') && {
           'code': 409,
-          'message': error.errors.map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
+          'message': (error.errors || [error]).map(arg => `${arg.type} in "${arg.instance.toString().split(':')[1].slice(0, -1)}"`).join(', ')
         } || error);
       });
       
