@@ -1,16 +1,15 @@
 ## DbSequel
 
-<<<<<<< HEAD
+### [2.1.0] 2020-03-04 by moreira
+- correçoes diversas
+
 ### [2.0.0] 2019-07-15 by moreira
 - altera estruturação dos objectos
+- inclui classes para extender sequelize.Model 
 
 ### [1.0.0] 2019-06-26 by Moreira 
 - inclui dependencia de sicinfo-idcreate no package.json
 - correções diversas
-=======
-### [2.0.0] 2019-07-07 by Moreira 
-- inclui classes para extender sequelize.Model 
->>>>>>> feature/2.0
 
 ### [1.0.0] 2019-06-26 by Moreira 
 - inclui dependencia de sicinfo-idcreate no package.json
