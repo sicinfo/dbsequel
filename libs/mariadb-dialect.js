@@ -98,7 +98,6 @@ class Document extends Model {
       super.findOrCreate(opts).then(([{ id }, created]) => {
         if (created) {
           const _id = md5(Object.values(opts.where).join(''));
-          log(101, _id);
           resolve({ 'result': { _id } });
         }
         else reject(errorsMsg('ConflitId', this.name, keydata[1]));
@@ -286,11 +285,6 @@ class Document extends Model {
       return [ head, body];
       
     }
-    
-// log(226, hasHead, _isArray, head, body)    ;
-    
-    
-    // return (resp => log(230, hasHead, resp) || resp)(hasHead && !_isArray && body || [head].concat(hasHead ? body : [body.length ? body : ]));
   }
 
   static jsonKeysToSql(col = '`rawdata`') {
@@ -532,5 +526,4 @@ module.exports = {
   dialectOptions, 
   uniqueId, 
   Document
-  // Relationship, 
 };
