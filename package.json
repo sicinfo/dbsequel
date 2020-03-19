@@ -1,6 +1,6 @@
 {
   "name": "sicinfo-dbsequel",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "main": "libs/mariadb-dialect.js",
   "dependencies": {
     "sequelize": "^5.21.5",

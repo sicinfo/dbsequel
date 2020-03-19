@@ -1,5 +1,8 @@
 ## DbSequel
 
+### [2.1.1] 2020-03-11 by moreira
+- bugfix: fetchDocument()
+
 ### [2.1.0] 2020-03-04 by moreira
 - correçoes diversas
 

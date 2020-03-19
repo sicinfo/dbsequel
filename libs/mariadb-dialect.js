@@ -76,34 +76,36 @@ class Document extends Model {
   // keydata: quando for aresta dever ser um array com
   // doctKey, fromId, toId
   // exemple.createDocument([doctKey, fromIf, toId], rawdata, opts)
-  static createDocument(keydata, rawdata = {}, opts = {}) {
-    return new Promise((resolve, reject) => {
-      
-      if (!Array.isArray(keydata)) keydata = [keydata];
-      if (!keydata[0]) return reject(errorsMsg('DocumentKeyRequired', this.name));
-      
-      keydata.unshift(this.collectionName);
+  /**
+   * @param  {Array} keydata 
+   */
+  static createDocument(...keydata) {
 
-      Reflect.set(opts, 'defaults', { keydata, rawdata });
-      Reflect.set(opts, 'raw', true);
-      Reflect.set(opts, 'plain', true);
-      Reflect.set(opts, 'paranoid', false);
-      Reflect.set(opts, 'attributes', ['id']);
-      Reflect.set(opts, 'where', {});
-      
-      ['collsKey', 'doctKey', 'fromId', 'toId'].splice(0, keydata.length).map((key, ind) => {
-        Reflect.set(opts.where, key, ind < 2 ? md5(keydata[ind]) : keydata[ind]);
-      });
+    const 
+      rawdata = 'string' === typeof keydata[0] ? {} : keydata.shift(),
+      opts = (a => null == a || 'string' === typeof a ? {} : keydata.pop())(keydata[keydata.length -1]);
 
-      super.findOrCreate(opts).then(([{ id }, created]) => {
-        if (created) {
-          const _id = md5(Object.values(opts.where).join(''));
-          resolve({ 'result': { _id } });
-        }
-        else reject(errorsMsg('ConflitId', this.name, keydata[1]));
-      }).catch(reject);
-      
+    if (!keydata[0]) return Promise.reject(errorsMsg('DocumentKeyRequired', this.name));
+    keydata.unshift(this.collectionName);
+    
+    Object.assign(opts, {
+      defaults: { keydata, rawdata },
+      raw: true,
+      plain: true,
+      paranoid: false,
+      attributes: ['id'],
+      where: {}
     });
+
+    ['collsKey', 'doctKey', 'fromId', 'toId'].map(
+      (key, ind) => { opts.where[key] = 2 > ind ? md5(keydata[ind]) : keydata[ind] || null }
+    );
+
+    // @ts-ignore
+    return new Promise((resolve, reject) => super.findOrCreate(opts).then(([{ id }, created]) => {
+      if (created) resolve({ result: { _id: md5(Object.values(opts.where).join('')) } });
+      else reject(errorsMsg('ConflitId', this.name, keydata[1]));
+    }).catch(reject));
   }
   
   static get collectionName() {
@@ -123,37 +125,30 @@ class Document extends Model {
   
   static fetchAllCollections(opts = {}) {
     
-    const
-      { name, collectionName } = this,
-      hasAttributes = Reflect.has(opts, 'attributes');
+    const hasAttributes = !!opts.attributes;
 
     if (!hasAttributes) {
-      Reflect.has(opts, 'attributes') || Reflect.set(opts, 'attributes', []);
-      opts.attributes.push(...this.attributes(name));
+      if (!opts.attributes) opts.attributes = [];
+      opts.attributes.push(...this.attributes(this.name));
     }
 
-    {
-      Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
-      const arg = where(col(`${name}.collsKey`), Op.eq, md5(collectionName));
-      Reflect.has(opts.where, Op.and) ?
-        Reflect.get(opts.where, Op.and).push(arg) :
-        Reflect.set(opts.where, Op.and, [arg]);
-    }
+    if (!opts.where) opts.where = {};
+    opts.where.collsKey = md5(this.collectionName);
 
-    ['Inherit', 'From', 'To'].some(key => {
-      !Reflect.has(this, key) ||
-        ((_model = Reflect.get(this, key)) =>
-          _model && (Reflect.has(opts, 'include') || Reflect.set(opts, 'include', [])) &&
-          opts.include.push(Document._include(hasAttributes, _model))
-        )() ||
-        hasAttributes ||
-        opts.attributes.push(`${key.toLowerCase()}Id`);
-    });
+    for (const key of ['Inherit', 'From', 'To']) {
+      if (!Reflect.has(this, key)) continue
+      if (this[key]) {
+          if (!opts.include) opts.include = [];
+          opts.include.push(Document._include(hasAttributes, this[key]));
+      }
+      else if (!hasAttributes) {
+          opts.attributes.push(`${key.toLowerCase()}Id`);
+      }
+    }
 
     return new Promise((resolve, reject) => {
-
       this.fetchAll(opts).then(result => {
-        if (!result) reject(errorsMsg('NotFound', collectionName));
+        if (!result) reject(errorsMsg('NotFound', this.collectionName));
         else if (opts.plain) resolve({ 'result': this._parse(result) });
         else if (Array.isArray(result)) resolve({ 'result': result.map(arg => this._parse(arg)) });
         else resolve({ result });
@@ -166,19 +161,12 @@ class Document extends Model {
   
   static fetchDocumentById(id, opts = {}) {
     return new Promise((resolve, reject) => {
-      
-      Reflect.set(opts, 'where', { id });
-      Reflect.set(opts, 'limit', 1);
-      Reflect.set(opts, 'plain', true);
-      
-      Reflect.has(opts, 'paranoid') ||
-      Reflect.set(opts, 'paranoid', false);
-      
+
+      opts = Object.assign({ paranoid: false }, opts, { where: { id }, limit: 1, plain: true });
+            
       {
         const args = this.attributes(this.name);
-        Reflect.has(opts, 'attributes') ?
-        Reflect.get(opts, 'attributes').push(...args) :
-        Reflect.set(opts, 'attributes', args);
+        opts.attributes ? opts.attributes.push(...args) : opts.attributes = args;
       }
 
       this.fetchAll(opts).then(result => {
@@ -188,35 +176,23 @@ class Document extends Model {
       
     });
   }
-  
-  static fetchDocument(documentKey, opts = {}) {
-    return new Promise((resolve, reject) => {
+  /**
+   * @param {*} args 
+   */
+  static fetchDocument(...args) {
+    const opts = 'object' === typeof args[args.length -1] ? args.pop() : {};
     
-      if (!documentKey) return reject(errorsMsg('documentKey'));
-      
-      Reflect.has(opts, 'where') || Reflect.set(opts, 'where', {});
-      
-      {
-        const arg = where(col(`${this.name}.doctKey`), Op.eq, md5(documentKey));
-        Reflect.has(opts.where, Op.and) ?
-        Reflect.get(opts.where, Op.and).push(arg) :
-        Reflect.set(opts.where, Op.and, [arg]);
-      }
-      
-      this.fetchOneCollection(opts).then(({ result = {}}) => {
-        resolve({ 'result': Reflect.get(result, documentKey) });
-      }).catch(reject);
-      
-    });
+    if (args.length < 1) return Promise.reject(errorsMsg('documentKey'));
+    args[0] = md5(args[0]);
+
+    if (!opts.where) opts.where = {};
+    ['doctKey', 'fromId', 'toId'].some((key, ind) => { opts.where[key] = args[ind] || null });
+  
+    return this.fetchOneCollection(opts);
   }
   
   static fetchOneCollection(opts = {}) {
-
-    [
-      ['limit', 1],
-      ['plain', true]
-    ].every(([key, val]) => Reflect.set(opts, key, val));
-      
+    Object.assign(opts, { limit: 1, plain: true });
     return this.fetchAllCollections(opts);
   }
   
@@ -377,7 +353,7 @@ class Document extends Model {
   }
 
   static patchDocument(id, values, options = {}) {
-    Reflect.set(options, 'where', where(col('id'), Op.eq, id));
+    options.where = where(col('id'), Op.eq, id);
     return this.patchCollection(values, options);
   }
   
